@@ -1,11 +1,16 @@
-import { useState } from 'react';
-import { taskService } from '../services/api';
+import { useState, useRef, useCallback } from 'react';
+import { taskService, voiceService } from '../services/api';
 import { useAppStore } from '../store/appStore';
 
 export function Dashboard() {
   const [newTaskRequest, setNewTaskRequest] = useState('');
   const { tasks, activeTaskId, setActiveTask, setTasks, isVoiceEnabled, setVoiceEnabled } = useAppStore();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState('Idle');
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const voiceSessionIdRef = useRef<string | null>(null);
 
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,6 +44,98 @@ export function Dashboard() {
     }
   };
 
+  const handleResumeTask = async (taskId: string) => {
+    try {
+      const task = await taskService.resume(taskId);
+      setTasks(tasks.map(t => 
+        t.id === taskId ? { ...t, state: task.state } : t
+      ));
+      setActiveTask(task.id);
+    } catch (error) {
+      console.error('Failed to resume task:', error);
+    }
+  };
+
+  const startVoiceListening = useCallback(async () => {
+    if (!isVoiceEnabled || !navigator.mediaDevices) {
+      console.warn('Voice not enabled or not supported');
+      return;
+    }
+
+    try {
+      // Start voice session
+      const sessionId = await voiceService.startSession();
+      voiceSessionIdRef.current = sessionId;
+
+      // Request microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Send accumulated audio for transcription
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        const arrayBuffer = await audioBlob.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        try {
+          const transcription = await voiceService.transcribeAudio(uint8Array);
+          if (transcription.text) {
+            setNewTaskRequest(transcription.text);
+            setVoiceStatus(`Heard: "${transcription.text}"`);
+            
+            // Optionally auto-submit
+            // await handleCreateTask(new Event('submit') as any);
+          }
+        } catch (error) {
+          console.error('Transcription failed:', error);
+          setVoiceStatus('Transcription failed');
+        }
+        
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      // Start recording
+      mediaRecorder.start(1000); // Send data every second
+      setIsListening(true);
+      setVoiceStatus('Listening...');
+      
+    } catch (error) {
+      console.error('Failed to start voice listening:', error);
+      setVoiceStatus('Error: ' + (error as Error).message);
+    }
+  }, [isVoiceEnabled]);
+
+  const stopVoiceListening = useCallback(() => {
+    if (mediaRecorderRef.current && isListening) {
+      mediaRecorderRef.current.stop();
+      setIsListening(false);
+      setVoiceStatus('Processing...');
+      
+      // End voice session
+      if (voiceSessionIdRef.current) {
+        voiceService.endSession(voiceSessionIdRef.current);
+        voiceSessionIdRef.current = null;
+      }
+    }
+  }, [isListening]);
+
+  const toggleVoiceListening = () => {
+    if (isListening) {
+      stopVoiceListening();
+    } else {
+      startVoiceListening();
+    }
+  };
+
   return (
     <div style={styles.container}>
       <header style={styles.header}>
@@ -50,12 +147,23 @@ export function Dashboard() {
               ...styles.button,
               backgroundColor: isVoiceEnabled ? '#4CAF50' : '#666',
             }}
+            title="Enable/disable voice processing"
           >
             🎤 Voice {isVoiceEnabled ? 'On' : 'Off'}
           </button>
-          <button style={{ ...styles.button, backgroundColor: '#f44336' }}>
-            ⏹ Stop
+          <button
+            onClick={toggleVoiceListening}
+            disabled={!isVoiceEnabled}
+            style={{
+              ...styles.button,
+              backgroundColor: isListening ? '#f44336' : '#2196F3',
+              opacity: isVoiceEnabled ? 1 : 0.5,
+            }}
+            title={isListening ? 'Stop listening' : 'Start listening'}
+          >
+            {isListening ? '⏹ Stop' : '🎙️ Listen'}
           </button>
+          <span style={styles.voiceStatus}>{voiceStatus}</span>
         </div>
       </header>
 
@@ -115,6 +223,17 @@ export function Dashboard() {
                       style={styles.cancelButton}
                     >
                       Cancel
+                    </button>
+                  )}
+                  {task.state === 'interrupted' && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleResumeTask(task.id);
+                      }}
+                      style={styles.resumeButton}
+                    >
+                      Resume
                     </button>
                   )}
                 </div>
@@ -259,5 +378,21 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: '#fff',
     cursor: 'pointer',
     fontSize: '12px',
+  },
+  resumeButton: {
+    marginTop: '8px',
+    padding: '6px 12px',
+    border: 'none',
+    borderRadius: '4px',
+    backgroundColor: '#FF9800',
+    color: '#fff',
+    cursor: 'pointer',
+    fontSize: '12px',
+  },
+  voiceStatus: {
+    fontSize: '12px',
+    color: '#aaa',
+    marginLeft: '12px',
+    alignSelf: 'center',
   },
 };

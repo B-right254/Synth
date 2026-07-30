@@ -5,8 +5,9 @@ Provides cross-platform audio capture and playback.
 """
 import asyncio
 import logging
+import numpy as np
 from abc import ABC, abstractmethod
-from typing import Optional, AsyncGenerator, Callable
+from typing import Optional, AsyncGenerator, Callable, List
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,98 @@ class BaseTTS(ABC):
         """Synthesize speech and save to file."""
         pass
 
+class PyAudioVAD(BaseVAD):
+    """
+    WebRTC VAD implementation using PyAudio.
+    Provides robust voice activity detection with configurable sensitivity.
+    """
+    
+    def __init__(self, config: VoiceConfig):
+        self.config = config
+        self.state = VADState.SILENT
+        self.silence_counter = 0
+        self._vad = None
+        self._audio_buffer = []
+        self._sample_rate = config.sample_rate
+        self._frame_duration_ms = 30  # WebRTC VAD works with 10/20/30ms frames
+        self._load_vad()
+        
+    def _load_vad(self):
+        """Load WebRTC VAD model."""
+        try:
+            import webrtcvad
+            # Mode 0-3: higher is more aggressive (we use 2 as default)
+            mode = int(self.config.vad_sensitivity * 3)
+            self._vad = webrtcvad.Vad(mode)
+            logger.info(f"WebRTC VAD loaded with mode {mode}")
+        except ImportError:
+            logger.warning("WebRTC VAD not available, falling back to SimpleVAD")
+            self._vad = None
+            
+    async def process_audio(self, audio_data: bytes) -> VADState:
+        """Process audio chunk using WebRTC VAD."""
+        if self._vad is None:
+            # Fallback to simple energy-based detection
+            return await self._simple_process(audio_data)
+            
+        try:
+            # WebRTC VAD expects 16-bit mono audio at specific sample rates
+            if len(audio_data) < 160:  # Minimum frame size
+                return self.state
+                
+            is_speech = self._vad.is_speech(audio_data, self._sample_rate)
+            
+            if is_speech:
+                self.state = VADState.SPEAKING
+                self.silence_counter = 0
+                self._audio_buffer.append(audio_data)
+            else:
+                self.silence_counter += 1
+                # Transition to silent after sustained silence
+                threshold = max(1, int(self.config.silence_duration_ms / self._frame_duration_ms))
+                if self.silence_counter > threshold and self.state == VADState.SPEAKING:
+                    self.state = VADState.SILENT
+                    
+            return self.state
+            
+        except Exception as e:
+            logger.error(f"VAD processing error: {e}")
+            return self.state
+            
+    async def _simple_process(self, audio_data: bytes) -> VADState:
+        """Fallback energy-based VAD."""
+        if len(audio_data) < 2:
+            return self.state
+            
+        # Calculate RMS energy
+        samples = np.frombuffer(audio_data, dtype=np.int16)
+        rms = np.sqrt(np.mean(samples.astype(np.float32) ** 2))
+        
+        threshold = 500 * (1.0 - self.config.vad_sensitivity)
+        
+        if rms > threshold:
+            self.state = VADState.SPEAKING
+            self.silence_counter = 0
+        else:
+            self.silence_counter += 1
+            if self.silence_counter > (self.config.silence_duration_ms / 100):
+                self.state = VADState.SILENT
+                
+        return self.state
+        
+    async def reset(self):
+        """Reset VAD state."""
+        self.state = VADState.SILENT
+        self.silence_counter = 0
+        self._audio_buffer = []
+        
+    def get_speech_buffer(self) -> bytes:
+        """Get accumulated speech audio buffer."""
+        buffer = b''.join(self._audio_buffer)
+        self._audio_buffer = []
+        return buffer
+
+
 class SimpleVAD(BaseVAD):
     """
     Simple energy-based VAD implementation.
@@ -123,23 +216,31 @@ class WhisperSTT(BaseSTT):
     """
     Whisper-based Speech-to-Text implementation.
     Uses whisper.cpp or transformers library.
+    Supports both openai-whisper (Linux/Mac) and whispercpp (Windows).
     """
     
-    def __init__(self, config: VoiceConfig, model_path: Optional[str] = None):
+    def __init__(self, config: VoiceConfig, model_path: Optional[str] = None, use_cpp: bool = False):
         self.config = config
         self.model_path = model_path
         self._model = None
+        self.use_cpp = use_cpp  # Use whisper.cpp on Windows
         
     async def _load_model(self):
         """Lazy load the Whisper model."""
         if self._model is None:
             try:
-                # Attempt to import whisper (would need to be installed)
-                import whisper
-                self._model = whisper.load_model(self.model_path or "base")
-                logger.info("Whisper model loaded successfully")
-            except ImportError:
-                logger.warning("Whisper not installed, using stub implementation")
+                if self.use_cpp:
+                    # Try whisper.cpp for Windows
+                    import whispercpp
+                    self._model = whispercpp.Whisper(model=self.model_path or "base")
+                    logger.info(f"Whisper.cpp model loaded: {self.model_path or 'base'}")
+                else:
+                    # Try openai-whisper for Linux/Mac
+                    import whisper
+                    self._model = whisper.load_model(self.model_path or "base")
+                    logger.info("Whisper model loaded successfully")
+            except ImportError as e:
+                logger.warning(f"Whisper not installed ({e}), using stub implementation")
                 self._model = "stub"
                 
     async def transcribe(self, audio_data: bytes) -> str:
@@ -152,19 +253,35 @@ class WhisperSTT(BaseSTT):
             return ""
             
         try:
-            # Save audio to temp file for whisper processing
             import tempfile
-            import numpy as np
+            import wave
+            import struct
             
+            # Create proper WAV file
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
-                # Write WAV header and audio data (simplified)
-                # In production, use proper WAV encoding
-                f.write(audio_data)
-                temp_path = f.name
+                temp_path = Path(f.name)
                 
-            result = self._model.transcribe(temp_path)
-            Path(temp_path).unlink(missing_ok=True)
-            return result.get("text", "")
+            # Write WAV header
+            with wave.open(str(temp_path), 'wb') as wav_file:
+                wav_file.setnchannels(1)  # Mono
+                wav_file.setsampwidth(2)  # 16-bit
+                wav_file.setframerate(self.config.sample_rate)
+                wav_file.writeframes(audio_data)
+            
+            # Transcribe based on backend
+            if self.use_cpp:
+                # whisper.cpp expects raw audio samples as numpy array
+                audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+                result = self._model.transcribe(audio_array)
+                text = result.get('text', '') if isinstance(result, dict) else str(result)
+            else:
+                # openai-whisper expects file path
+                result = self._model.transcribe(str(temp_path))
+                text = result.get("text", "")
+            
+            # Cleanup
+            temp_path.unlink(missing_ok=True)
+            return text.strip()
             
         except Exception as e:
             logger.error(f"Transcription failed: {e}")
@@ -200,6 +317,81 @@ class WhisperSTT(BaseSTT):
             if result:
                 yield result
 
+class WindowsSAPI5TTS(BaseTTS):
+    """
+    Windows SAPI5 Text-to-Speech implementation using pyttsx3.
+    Provides native Windows TTS with voice selection.
+    """
+    
+    def __init__(self, config: VoiceConfig, voice_name: Optional[str] = None, rate: int = 150):
+        self.config = config
+        self.voice_name = voice_name
+        self.rate = rate
+        self._engine = None
+        
+    def _get_engine(self):
+        """Lazy load pyttsx3 engine."""
+        if self._engine is None:
+            try:
+                import pyttsx3
+                self._engine = pyttsx3.init()
+                self._engine.setProperty('rate', self.rate)
+                
+                if self.voice_name:
+                    voices = self._engine.getProperty('voices')
+                    for voice in voices:
+                        if self.voice_name.lower() in voice.name.lower():
+                            self._engine.setProperty('voice', voice.id)
+                            break
+                            
+                logger.info("pyttsx3 TTS engine initialized")
+            except ImportError:
+                logger.warning("pyttsx3 not available, TTS disabled")
+                self._engine = "stub"
+            except Exception as e:
+                logger.error(f"Failed to initialize TTS engine: {e}")
+                self._engine = "stub"
+        return self._engine
+        
+    async def synthesize(self, text: str) -> bytes:
+        """Synthesize speech - returns empty bytes as this is fire-and-play."""
+        logger.debug(f"TTS requested for {len(text)} chars (fire-and-play)")
+        return b""
+        
+    async def synthesize_to_file(self, text: str, output_path: Path) -> Path:
+        """Synthesize speech and save to file."""
+        engine = self._get_engine()
+        
+        if engine == "stub":
+            logger.warning("TTS stub - cannot save to file")
+            return output_path
+            
+        try:
+            # pyttsx3 doesn't support direct file save, so we use subprocess
+            # For proper file output on Windows, would need SAPI directly
+            await self.speak(text)
+            logger.info(f"TTS spoken: {text[:50]}...")
+            return output_path
+        except Exception as e:
+            logger.error(f"TTS synthesis failed: {e}")
+            return output_path
+        
+    async def speak(self, text: str) -> bool:
+        """Speak text using pyttsx3."""
+        engine = self._get_engine()
+        
+        if engine == "stub":
+            return False
+            
+        try:
+            engine.say(text)
+            engine.runAndWait()
+            return True
+        except Exception as e:
+            logger.error(f"Speech playback failed: {e}")
+            return False
+
+
 class SystemTTS(BaseTTS):
     """
     System-native Text-to-Speech implementation.
@@ -209,12 +401,29 @@ class SystemTTS(BaseTTS):
     def __init__(self, config: VoiceConfig, voice: Optional[str] = None):
         self.config = config
         self.voice = voice
+        self._use_pyttsx3 = False
+        
+        # Try to use pyttsx3 on Windows for better control
+        import platform
+        if platform.system() == "Windows":
+            try:
+                import pyttsx3
+                self._use_pyttsx3 = True
+                self._engine = pyttsx3.init()
+                self._engine.setProperty('rate', 150)
+                if voice:
+                    voices = self._engine.getProperty('voices')
+                    for v in voices:
+                        if voice.lower() in v.name.lower():
+                            self._engine.setProperty('voice', v.id)
+                            break
+                logger.info("Windows TTS initialized with pyttsx3")
+            except ImportError:
+                logger.info("Using PowerShell TTS fallback")
         
     async def synthesize(self, text: str) -> bytes:
         """Synthesize speech - returns empty bytes as this is fire-and-play."""
-        # For system TTS, we typically play directly rather than returning audio
-        # This method would require a TTS engine that returns audio (like Piper, Coqui, etc.)
-        logger.debug(f"TTS requested for {len(text)} chars (stub implementation)")
+        logger.debug(f"TTS requested for {len(text)} chars (fire-and-play)")
         return b""
         
     async def synthesize_to_file(self, text: str, output_path: Path) -> Path:
@@ -293,27 +502,54 @@ class VoiceProcessor:
     """
     Main voice processing orchestrator.
     Coordinates VAD, STT, and TTS components.
+    Supports both PyAudio (Windows) and simple energy-based VAD (cross-platform).
     """
     
-    def __init__(self, config: Optional[VoiceConfig] = None):
+    def __init__(self, config: Optional[VoiceConfig] = None, use_windows_audio: bool = False):
         self.config = config or VoiceConfig()
-        self.vad = SimpleVAD(self.config)
-        self.stt = WhisperSTT(self.config)
-        self.tts = SystemTTS(self.config)
+        self.use_windows_audio = use_windows_audio
+        
+        # Use PyAudioVAD if available and requested
+        if use_windows_audio:
+            try:
+                self.vad = PyAudioVAD(self.config)
+                logger.info("Using PyAudio/WebRTC VAD")
+            except Exception as e:
+                logger.warning(f"PyAudio VAD not available ({e}), using SimpleVAD")
+                self.vad = SimpleVAD(self.config)
+        else:
+            self.vad = SimpleVAD(self.config)
+            
+        # Use whisper.cpp on Windows, openai-whisper elsewhere
+        import platform
+        self.stt = WhisperSTT(
+            self.config, 
+            use_cpp=(platform.system() == "Windows")
+        )
+        
+        # Use pyttsx3 TTS on Windows
+        if platform.system() == "Windows":
+            self.tts = WindowsSAPI5TTS(self.config)
+        else:
+            self.tts = SystemTTS(self.config)
+            
         self._is_listening = False
         self._speech_callback: Optional[Callable[[str], None]] = None
+        self._audio_buffer: List[bytes] = []
         
     async def start_listening(self, callback: Callable[[str], None]):
         """Start listening for speech and call callback with transcribed text."""
         self._is_listening = True
         self._speech_callback = callback
+        self._audio_buffer = []
         logger.info("Voice processor started listening")
-        # In production, this would start an audio capture loop
+        # In production, this would start an audio capture loop using PyAudio
         
     async def stop_listening(self):
         """Stop listening."""
         self._is_listening = False
         await self.vad.reset()
+        self._audio_buffer = []
         logger.info("Voice processor stopped listening")
         
     async def process_voice_input(self, audio_data: bytes) -> Optional[str]:
@@ -325,13 +561,20 @@ class VoiceProcessor:
         
         if state == VADState.SPEAKING:
             # Buffer audio for transcription
-            # In production, implement proper buffering and endpoint detection
-            pass
-        elif state == VADState.SILENT:
-            # If transitioning from speaking to silent, transcribe buffered audio
-            # This is simplified; real implementation needs proper buffering
-            pass
-            
+            self._audio_buffer.append(audio_data)
+        elif state == VADState.SILENT and self._audio_buffer:
+            # Transition from speaking to silent - transcribe buffered audio
+            if len(self._audio_buffer) > 0:
+                combined_audio = b''.join(self._audio_buffer)
+                self._audio_buffer = []
+                
+                # Transcribe the buffered speech
+                text = await self.stt.transcribe(combined_audio)
+                
+                if text and self._speech_callback:
+                    await self._speech_callback(text)
+                return text
+                
         return None
         
     async def speak_text(self, text: str) -> bool:
@@ -341,8 +584,28 @@ class VoiceProcessor:
     async def transcribe_audio(self, audio_data: bytes) -> str:
         """Transcribe audio data to text."""
         return await self.stt.transcribe(audio_data)
+        
+    def get_vad_state(self) -> str:
+        """Get current VAD state."""
+        return self.vad.state
+        
+    async def start_voice_session(self) -> str:
+        """
+        Start a voice session and return session ID.
+        This is a placeholder for WebSocket-based real-time voice sessions.
+        """
+        import uuid
+        session_id = str(uuid.uuid4())
+        logger.info(f"Voice session started: {session_id}")
+        return session_id
+        
+    async def end_voice_session(self, session_id: str):
+        """End a voice session."""
+        await self.stop_listening()
+        logger.info(f"Voice session ended: {session_id}")
+
 
 # Factory function
-def get_voice_processor(config: Optional[VoiceConfig] = None) -> VoiceProcessor:
+def get_voice_processor(config: Optional[VoiceConfig] = None, use_windows_audio: bool = False) -> VoiceProcessor:
     """Create a voice processor instance."""
-    return VoiceProcessor(config)
+    return VoiceProcessor(config, use_windows_audio)

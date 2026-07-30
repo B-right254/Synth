@@ -52,9 +52,48 @@ export const taskService = {
     await apiClient.post(`/tasks/${taskId}/cancel`);
   },
 
+  resume: async (taskId: string): Promise<Task> => {
+    const response = await apiClient.post(`/tasks/${taskId}/resume`);
+    return response.data;
+  },
+
   reply: async (taskId: string, answer: string): Promise<Task> => {
     const response = await apiClient.post(`/tasks/${taskId}/reply`, { answer });
     return response.data;
+  },
+};
+
+export const voiceService = {
+  startSession: async (): Promise<string> => {
+    // For now, generate a client-side session ID
+    // In production, this would call the backend to start a session
+    return crypto.randomUUID();
+  },
+
+  endSession: async (sessionId: string): Promise<void> => {
+    // Client-side cleanup - backend session ends automatically
+    console.log(`Voice session ended: ${sessionId}`);
+  },
+
+  transcribeAudio: async (audioData: Uint8Array): Promise<{ text: string }> => {
+    // Convert to blob and send to backend
+    const blob = new Blob([audioData], { type: 'audio/wav' });
+    const formData = new FormData();
+    formData.append('audio', blob, 'recording.wav');
+
+    const response = await fetch(`${API_BASE_URL}/voice/transcribe`, {
+      method: 'POST',
+      headers: {
+        'X-Control-Token': getControlToken() || '',
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Transcription failed: ${response.statusText}`);
+    }
+
+    return response.json();
   },
 };
 
