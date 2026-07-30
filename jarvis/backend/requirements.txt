@@ -25,9 +25,11 @@ websockets==12.0
 # Audio processing (Voice Pipeline - Phase 3)
 pyaudio==0.2.14; sys_platform == 'win32'
 webrtcvad==2.0.10
+numpy>=1.24.0
 
 # Speech-to-Text
 whispercpp==1.0.0; sys_platform == 'win32'
+openai-whisper>=20231117; sys_platform != 'win32'
 
 # Text-to-Speech
 pyttsx3==2.98; sys_platform == 'win32'
