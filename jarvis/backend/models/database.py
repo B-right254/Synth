@@ -88,6 +88,7 @@ class RunnerLease(Base):
     process_id = Column(Integer, nullable=False)
     heartbeat = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
+    last_task_id = Column(String)  # Track which task was being executed
     
     __table_args__ = (
         CheckConstraint("id = 1", name="check_single_lease"),

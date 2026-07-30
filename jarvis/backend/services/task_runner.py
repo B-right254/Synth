@@ -21,9 +21,12 @@ class TaskRunner:
         self._lease_nonce: Optional[str] = None
         self._current_task_id: Optional[str] = None
 
-    async def acquire_lease(self) -> bool:
+    async def acquire_lease(self, task_id: Optional[str] = None) -> bool:
         """Acquire exclusive runner lease.
 
+        Args:
+            task_id: Optional task ID being resumed
+            
         Returns:
             True if lease acquired, False if another runner holds it
         """
@@ -33,15 +36,21 @@ class TaskRunner:
         existing = self.db.query(RunnerLease).filter_by(id=1).first()
         
         if existing:
-            # Check if lease is stale (expired heartbeat)
+            # Check if lease is stale (expired heartbeat - 30 second timeout)
             if datetime.utcnow() > existing.expires_at:
-                # Stale lease, take over
+                # Stale lease detected - mark any running task as interrupted
+                if existing.last_task_id:
+                    self._mark_task_interrupted(existing.last_task_id)
+                
+                # Take over the lease
                 existing.owner_nonce = nonce
                 existing.process_id = id(self)
                 existing.heartbeat = datetime.utcnow()
                 existing.expires_at = datetime.utcnow() + timedelta(seconds=30)
+                existing.last_task_id = task_id
                 self.db.commit()
                 self._lease_nonce = nonce
+                self._current_task_id = task_id
                 return True
             else:
                 # Active lease held by another runner
@@ -54,15 +63,20 @@ class TaskRunner:
                 process_id=id(self),
                 heartbeat=datetime.utcnow(),
                 expires_at=datetime.utcnow() + timedelta(seconds=30),
+                last_task_id=task_id,
             )
             self.db.add(lease)
             self.db.commit()
             self._lease_nonce = nonce
+            self._current_task_id = task_id
             return True
 
-    async def renew_lease(self) -> bool:
+    async def renew_lease(self, task_id: Optional[str] = None) -> bool:
         """Renew the runner lease heartbeat.
 
+        Args:
+            task_id: Optional task ID to update
+            
         Returns:
             True if renewal successful, False if lease lost
         """
@@ -76,6 +90,9 @@ class TaskRunner:
 
         lease.heartbeat = datetime.utcnow()
         lease.expires_at = datetime.utcnow() + timedelta(seconds=30)
+        if task_id:
+            lease.last_task_id = task_id
+            self._current_task_id = task_id
         self.db.commit()
         return True
 
@@ -84,9 +101,51 @@ class TaskRunner:
         if self._lease_nonce:
             lease = self.db.query(RunnerLease).filter_by(id=1).first()
             if lease and lease.owner_nonce == self._lease_nonce:
+                # Clear last_task_id on clean release
+                lease.last_task_id = None
                 self.db.delete(lease)
                 self.db.commit()
             self._lease_nonce = None
+            self._current_task_id = None
+
+    def _mark_task_interrupted(self, task_id: str):
+        """Mark a running task as interrupted due to crash/restart.
+        
+        This is called when we detect a stale lease and need to mark
+        the previously running task as interrupted.
+        
+        Args:
+            task_id: ID of the task that was running
+        """
+        task = self.db.query(Task).filter_by(id=task_id).first()
+        if task and task.state == TaskState.RUNNING.value:
+            # Mark task as interrupted
+            task.state = TaskState.INTERRUPTED.value
+            task.version += 1
+            task.updated_at = datetime.utcnow()
+            
+            # Get next sequence number
+            last_event = self.db.query(TaskEvent).filter_by(task_id=task_id).order_by(
+                TaskEvent.sequence_num.desc()
+            ).first()
+            next_seq = (last_event.sequence_num + 1) if last_event else 1
+            
+            # Append interruption event
+            import json
+            event = TaskEvent(
+                task_id=task_id,
+                event_type="task.interrupted",
+                event_data=json.dumps({
+                    "reason": "runner_crash_or_restart",
+                    "detected_at": datetime.utcnow().isoformat(),
+                    "note": "Task was running when runner lease expired. Resume will re-observe before continuing."
+                }),
+                sequence_num=next_seq,
+                created_at=datetime.utcnow(),
+            )
+            self.db.add(event)
+            self.db.commit()
+            logger.info(f"Marked task {task_id} as interrupted due to stale lease")
 
     def _verify_lease(self) -> bool:
         """Verify we still hold the lease."""
