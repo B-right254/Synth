@@ -7,8 +7,8 @@ import shutil
 from pathlib import Path
 from typing import Dict, Any, List
 
-from tools.executor import BaseTool
-from api.schemas import (
+from backend.tools.executor import BaseTool
+from backend.api.schemas import (
     ToolOutput,
     FileListInput,
     FileReadInput,
