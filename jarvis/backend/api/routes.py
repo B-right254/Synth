@@ -3,13 +3,15 @@ API Routes for JARVIS Backend
 Handles task management, tool execution, settings, and skills.
 """
 import logging
+import asyncio
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from backend.models.database import get_db
 from backend.services.task_runner import get_runner, TaskRunner
 from backend.services.skills_system import get_registry, initialize_default_skills
+from backend.services.task_execution_loop import run_task
 from backend.adapters.ollama_adapter import get_adapter, format_tools_for_ollama
 from backend.tools.executor import ToolExecutor
 from backend.api.schemas import (
@@ -65,10 +67,11 @@ async def health_check(db: Session = Depends(get_db)):
 @router.post("/tasks", response_model=TaskResponse)
 async def create_task(
     task_data: TaskCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     tool_executor: ToolExecutor = Depends(get_tool_executor)
 ):
-    """Create a new task from user request."""
+    """Create a new task from user request and start execution."""
     runner = get_runner(db)
     
     # Acquire lease
@@ -94,28 +97,34 @@ async def create_task(
         tools = tool_executor.list_tools()
         formatted_tools = format_tools_for_ollama(tools)
         
-        # Transition to planning state
+        # Transition to running state (skip planning, go straight to execution)
         await runner.transition_state(
             task_id=task.id,
-            new_state=TaskState.PLANNING,
-            event_type="task.planning_started",
+            new_state=TaskState.RUNNING,
+            event_type="task.execution_started",
             event_data={
                 "tools_available": len(tools),
-                "skills_available": len(registry.list_skills())
+                "skills_available": len(registry.list_skills()),
+                "started_at": task.created_at.isoformat()
             }
         )
+        
+        # Start async task execution in background
+        background_tasks.add_task(run_task, db, task.id, tool_executor)
+        
+        logger.info(f"Task {task.id} created and execution started in background")
         
         return TaskResponse(
             id=task.id,
             original_request=task.original_request,
-            state=TaskState(task.state),
+            state=TaskState.RUNNING,
             created_at=task.created_at,
             updated_at=task.updated_at,
             version=task.version
         )
         
     finally:
-        # Release lease after task creation
+        # Release lease after task creation (execution has its own lease)
         await runner.release_lease()
 
 
