@@ -27,8 +27,10 @@ class DatabaseManager:
         )
         
         # Enable WAL mode for concurrent reads
+        from sqlalchemy import text
         with self.engine.connect() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(text("PRAGMA journal_mode=WAL"))
+            conn.commit()
         
         # Create tables
         Base.metadata.create_all(self.engine)

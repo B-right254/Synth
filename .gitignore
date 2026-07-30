@@ -1,55 +1,235 @@
-```
-# Python
+```gitignore
+# Python cache
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+*.pyc
+*.pyo
+*.pyd
 
-# Virtual environments
-venv/
-ENV/
-env.bak/
-.venv/
-
-# Frontend
+# Dependencies
 node_modules/
-dist/
-build/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
-# IDE
+# Build outputs
+jarvis/frontend/dist/
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.*
+
+# IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Logs
-*.log
-
-# Environment
-.env
-.env.local
-*.env.*
-
-# OS
+# System files
 .DS_Store
 Thumbs.db
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
+
+# Python specific
+*.egg-info/
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+
+# JavaScript/Node.js specific
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+node_modules/
+jspm_packages/
+
+# Distribution / packaging
+.Python
+_build/
+buck-out/
+gen/
+dist/
+build/
+*.egg
+
+# Testing
+.pytest_cache/
+.hypothesis/
+.coverage*
+
+# Translations
+*.mo
+*.pot
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask
+instance/
+.webassets-cache
+
+# Scrapy
+.eggs/
+items.json
+logs/
+requests.json
+responses/
+scrapy.log
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Sage
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre
+.pyre/
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+.DS_Store
+.directory
+.Trashes
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.com.apple.systemdirs.plist
+.com.apple.mixedport.plist
+.apdisk
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp
+.pnp.js
+.cache/
+.parcel-cache
+
+# Bower
+bower_components/
+
+# Grunt
+Gruntfile.js
+
+# Gulp
+gulpfile.js
+
+# Brunch
+brunch-config.js
+
+# Docker
+.dockerignore
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+# End of section
 ```
