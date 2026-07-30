@@ -298,7 +298,14 @@ class SettingsUpdate(BaseModel):
 
 class SettingsResponse(BaseModel):
     """Schema for settings response."""
-    settings: Dict[str, str]
+    host: str
+    port: int
+    ollama_cloud_base_url: str
+    selected_model: str
+    file_roots: List[str]
+    max_actions_per_task: int
+    max_cloud_requests_per_task: int
+    voice_enabled: bool
 
 
 # Health Check Schemas
@@ -334,3 +341,19 @@ class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
     code: Optional[str] = None
+
+
+# Tool Execution Request/Response Schemas
+
+class ToolExecutionRequest(BaseModel):
+    """Schema for direct tool execution request."""
+    tool_name: str
+    params: Dict[str, Any] = {}
+
+
+class ToolExecutionResponse(BaseModel):
+    """Schema for tool execution response."""
+    success: bool
+    output: Optional[Any] = None
+    error: Optional[str] = None
+    evidence: Optional[str] = None

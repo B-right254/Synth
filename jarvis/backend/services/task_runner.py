@@ -9,8 +9,8 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
-from models.database import Task, TaskEvent, RunnerLease
-from api.schemas import TaskState
+from backend.models.database import Task, TaskEvent, RunnerLease
+from backend.api.schemas import TaskState
 
 
 class TaskRunner:

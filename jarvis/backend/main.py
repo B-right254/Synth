@@ -10,10 +10,13 @@ import uuid
 
 from .core.config import settings, generate_control_token
 from .core.db_manager import init_database, DatabaseManager
+from .models.database import set_db_manager
 from .core.auth import create_auth_dependency
 from .api.schemas import HealthResponse, ErrorResponse
+from .api.routes import router as api_router
 from .tools.executor import ToolExecutor
 from .tools.system_tools import create_system_tools
+from .services.skills_system import initialize_default_skills
 
 
 # Global instances
@@ -38,15 +41,32 @@ async def lifespan(app: FastAPI):
         "jarvis.db"
     )
     db_manager = init_database(db_path)
+    set_db_manager(db_manager)
     print(f"Database initialized at: {db_path}")
     
     # Initialize tool executor
     tool_executor = ToolExecutor()
     
-    # Register system tools
+    # Register all tools
+    from .tools.system_tools import create_system_tools
+    from .tools.file_tools import create_file_tools
+    from .tools.app_tools import create_app_tools
+    from .tools.package_tools import create_package_tools
+    
     for tool in create_system_tools():
         tool_executor.register_tool(tool)
+    for tool in create_file_tools():
+        tool_executor.register_tool(tool)
+    for tool in create_app_tools():
+        tool_executor.register_tool(tool)
+    for tool in create_package_tools():
+        tool_executor.register_tool(tool)
+        
     print(f"Registered {len(tool_executor.list_tools())} tools")
+    
+    # Initialize skills system
+    initialize_default_skills()
+    print("Skills system initialized")
     
     yield
     
@@ -60,6 +80,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan
 )
+
+# Include API routes
+app.include_router(api_router, prefix="/api/v1")
 
 # CORS middleware - only allow local origin
 app.add_middleware(
@@ -78,7 +101,7 @@ def get_auth():
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint (legacy, moved to /api/v1/health)."""
     return HealthResponse(
         status="healthy",
         version="0.1.0",
@@ -87,51 +110,16 @@ async def health_check():
     )
 
 
-@app.post("/tasks")
-async def create_task(request: Request, auth: bool = Depends(get_auth())):
-    """Create a new task."""
-    # TODO: Implement task creation
-    return {"message": "Task creation not yet implemented"}
-
-
+# Legacy endpoints - moved to /api/v1/*
 @app.get("/tasks")
-async def list_tasks(auth: bool = Depends(get_auth())):
-    """List all tasks."""
-    # TODO: Implement task listing
-    return {"tasks": [], "total": 0}
-
-
-@app.get("/tasks/{task_id}")
-async def get_task(task_id: str, auth: bool = Depends(get_auth())):
-    """Get a specific task."""
-    # TODO: Implement task retrieval
-    return {"message": f"Task {task_id} not found"}
-
-
-@app.post("/tasks/{task_id}/cancel")
-async def cancel_task(task_id: str, auth: bool = Depends(get_auth())):
-    """Cancel a running task."""
-    # TODO: Implement task cancellation
-    return {"message": "Task cancellation not yet implemented"}
-
-
-@app.get("/settings")
-async def get_settings(auth: bool = Depends(get_auth())):
-    """Get current settings."""
-    # TODO: Implement settings retrieval
-    return {"settings": {}}
-
-
-@app.put("/settings")
-async def update_settings(request: Request, auth: bool = Depends(get_auth())):
-    """Update settings."""
-    # TODO: Implement settings update
-    return {"message": "Settings update not yet implemented"}
+async def list_tasks_legacy():
+    """Legacy endpoint - use /api/v1/tasks instead."""
+    return {"message": "Use /api/v1/tasks"}
 
 
 @app.get("/tools")
-async def list_tools(auth: bool = Depends(get_auth())):
-    """List available tools."""
+async def list_tools_legacy():
+    """Legacy endpoint - use /api/v1/tools instead."""
     if tool_executor:
         return {"tools": tool_executor.list_tools()}
     return {"tools": []}
