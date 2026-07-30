@@ -3,10 +3,34 @@ Database models and schema definitions for JARVIS.
 """
 
 from sqlalchemy import Column, String, Integer, Text, DateTime, ForeignKey, CheckConstraint
-from sqlalchemy.orm import relationship, declarative_base
+from sqlalchemy.orm import relationship, declarative_base, Session
 from datetime import datetime
+import os
 
 Base = declarative_base()
+
+
+# Database manager for dependency injection
+_db_manager = None
+
+
+def get_db() -> Session:
+    """Get database session for dependency injection.
+    
+    This function is used by FastAPI's Depends() to provide database sessions.
+    It requires the database manager to be initialized first.
+    """
+    if _db_manager is None:
+        raise RuntimeError("Database not initialized. Call init_database first.")
+    
+    with _db_manager.get_session() as session:
+        yield session
+
+
+def set_db_manager(manager):
+    """Set the database manager instance."""
+    global _db_manager
+    _db_manager = manager
 
 
 class Task(Base):
