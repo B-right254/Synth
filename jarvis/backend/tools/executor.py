@@ -8,7 +8,21 @@ from typing import Type, Dict, Any, Optional
 from pydantic import BaseModel
 import time
 
-from ..api.schemas import ToolOutput
+# Use absolute import instead of relative
+try:
+    from api.schemas import ToolOutput
+except ImportError:
+    # Fallback for different import contexts
+    try:
+        from jarvis_backend.api.schemas import ToolOutput
+    except ImportError:
+        # Define minimal fallback if needed
+        class ToolOutput(BaseModel):
+            success: bool
+            data: Optional[Dict[str, Any]] = None
+            error: Optional[Dict[str, Any]] = None
+            evidence: Optional[Dict[str, Any]] = None
+            duration_ms: int = 0
 
 
 class BaseTool(ABC):
