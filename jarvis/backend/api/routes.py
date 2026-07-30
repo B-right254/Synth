@@ -218,6 +218,71 @@ async def cancel_task(task_id: str, db: Session = Depends(get_db)):
         await runner.release_lease()
 
 
+@router.post("/tasks/{task_id}/resume", response_model=TaskResponse)
+async def resume_task(task_id: str, db: Session = Depends(get_db)):
+    """Resume an interrupted task.
+    
+    This endpoint allows resuming a task that was interrupted due to
+    a crash or restart. The task will re-observe state before continuing
+    any mutating operations.
+    """
+    runner = get_runner(db)
+    
+    # Acquire lease with task ID for tracking
+    if not await runner.acquire_lease(task_id=task_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot resume task while another runner is active"
+        )
+    
+    try:
+        task = await runner.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        
+        # Only interrupted tasks can be resumed
+        if task.state != TaskState.INTERRUPTED.value:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot resume task in state {task.state}. Only interrupted tasks can be resumed."
+            )
+        
+        # Transition back to running
+        updated_task = await runner.transition_state(
+            task_id=task_id,
+            new_state=TaskState.RUNNING,
+            event_type="task.resumed",
+            event_data={
+                "resumed_at": datetime.utcnow().isoformat(),
+                "note": "Task resumed after interruption. Will re-observe before continuing."
+            }
+        )
+        
+        # Start execution in background
+        from backend.tools.executor import ToolExecutor
+        tool_executor = ToolExecutor()
+        from backend.api.routes import get_tool_executor
+        tool_executor = get_tool_executor()
+        
+        from backend.services.task_execution_loop import run_task
+        import asyncio
+        asyncio.create_task(run_task(db, task_id, tool_executor))
+        
+        logger.info(f"Task {task_id} resumed and execution started")
+        
+        return TaskResponse(
+            id=updated_task.id,
+            original_request=updated_task.original_request,
+            state=TaskState(updated_task.state),
+            created_at=updated_task.created_at,
+            updated_at=updated_task.updated_at,
+            version=updated_task.version
+        )
+        
+    finally:
+        await runner.release_lease()
+
+
 @router.get("/tasks/{task_id}/events")
 async def get_task_events(task_id: str, db: Session = Depends(get_db)):
     """Get event history for a task."""
