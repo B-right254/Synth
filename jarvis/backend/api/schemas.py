@@ -84,7 +84,7 @@ class ToolOutput(BaseModel):
     data: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
     evidence: Optional[Dict[str, Any]] = None
-    duration_ms: int
+    duration_ms: int = 0
 
 
 # System Read Tool Schemas
