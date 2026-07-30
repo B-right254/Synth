@@ -7,8 +7,8 @@ import subprocess
 import platform
 from typing import Dict, Any, List, Optional
 
-from tools.executor import BaseTool
-from api.schemas import (
+from backend.tools.executor import BaseTool
+from backend.api.schemas import (
     ToolOutput,
     AppListInput,
     AppLaunchInput,
