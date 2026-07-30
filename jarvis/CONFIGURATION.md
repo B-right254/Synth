@@ -1,5 +1,27 @@
 # JARVIS Configuration Guide
 
+## Quick Start
+
+1. **Create `.env` file** in `jarvis/backend/` directory with your API key:
+   ```bash
+   JARVIS_OLLAMA_API_KEY=your_actual_api_key_here
+   JARVIS_SELECTED_MODEL=qwen2.5:7b
+   ```
+
+2. **Get your Ollama API Key:**
+   - Visit [https://ollama.com](https://ollama.com)
+   - Sign up / Log in
+   - Go to API settings
+   - Generate and copy your API key
+
+3. **Start the backend:**
+   ```bash
+   cd jarvis/backend
+   python -m uvicorn main:app --reload
+   ```
+
+---
+
 ## Environment Setup
 
 JARVIS requires environment variables to be set for production use. Create a `.env` file in the `jarvis/backend/` directory or set system environment variables with the `JARVIS_` prefix.
