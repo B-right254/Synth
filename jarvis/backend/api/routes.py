@@ -17,7 +17,8 @@ from backend.tools.executor import ToolExecutor
 from backend.api.schemas import (
     TaskCreate, TaskResponse, TaskListResponse, 
     TaskState, HealthResponse, SettingsResponse,
-    ToolExecutionRequest, ToolExecutionResponse
+    ToolExecutionRequest, ToolExecutionResponse,
+    VoiceStartResponse, VoiceAudioInput
 )
 
 logger = logging.getLogger(__name__)
@@ -489,3 +490,92 @@ async def chat_completion(request: Request):
     except Exception as e:
         logger.error(f"Chat completion failed: {e}")
         raise HTTPException(status_code=502, detail=f"Ollama Cloud request failed: {str(e)}")
+
+
+# Voice API Endpoints
+
+@router.post("/voice/start", response_model=VoiceStartResponse)
+async def start_voice_session():
+    """Start a new voice processing session."""
+    from backend.jarvis_backend.services.voice_service import get_voice_processor, VoiceConfig
+    
+    config = VoiceConfig(
+        sample_rate=16000,
+        channels=1,
+        vad_sensitivity=0.5,
+        silence_duration_ms=1000
+    )
+    
+    processor = get_voice_processor(config, use_windows_audio=False)
+    session_id = await processor.start_voice_session()
+    
+    return VoiceStartResponse(
+        session_id=session_id,
+        status="listening"
+    )
+
+
+@router.post("/voice/{session_id}/audio")
+async def process_voice_audio(session_id: str, audio_input: VoiceAudioInput):
+    """Process audio frame from voice session."""
+    from backend.jarvis_backend.services.voice_service import get_voice_processor, VoiceConfig
+    import base64
+    
+    # In production, maintain session state in memory/redis
+    config = VoiceConfig(
+        sample_rate=audio_input.sample_rate,
+        channels=audio_input.channels
+    )
+    
+    processor = get_voice_processor(config, use_windows_audio=False)
+    
+    # Decode base64 audio data
+    try:
+        audio_data = base64.b64decode(audio_input.audio_data)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid audio data: {str(e)}")
+    
+    # Process audio and get transcription
+    text = await processor.process_voice_input(audio_data)
+    
+    return {
+        "session_id": session_id,
+        "vad_state": processor.get_vad_state(),
+        "transcription": text or "",
+        "is_speaking": processor.get_vad_state() == "speaking"
+    }
+
+
+@router.post("/voice/{session_id}/end")
+async def end_voice_session(session_id: str):
+    """End a voice session."""
+    from backend.jarvis_backend.services.voice_service import get_voice_processor, VoiceConfig
+    
+    config = VoiceConfig()
+    processor = get_voice_processor(config, use_windows_audio=False)
+    await processor.end_voice_session(session_id)
+    
+    return {"session_id": session_id, "status": "ended"}
+
+
+@router.post("/voice/speak")
+async def speak_text(request: Request):
+    """Convert text to speech."""
+    from backend.jarvis_backend.services.voice_service import get_voice_processor, VoiceConfig
+    import json
+    
+    data = await request.json()
+    text = data.get("text", "")
+    
+    if not text:
+        raise HTTPException(status_code=400, detail="Text is required")
+    
+    config = VoiceConfig()
+    processor = get_voice_processor(config, use_windows_audio=False)
+    
+    success = await processor.speak_text(text)
+    
+    return {
+        "success": success,
+        "text": text[:100] + "..." if len(text) > 100 else text
+    }
